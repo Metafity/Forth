@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::OnceState};
+use std::collections::HashMap;
 
 pub type Value = i32;
 pub type Result = std::result::Result<(), Error>;
@@ -17,8 +17,8 @@ pub enum Error {
 }
 
 pub enum TokenType {
-    Word,
-    Num,
+    Word(String),
+    Num(i32),
 }
 
 pub enum WordReadState {
@@ -26,6 +26,7 @@ pub enum WordReadState {
     ToreadWord,
     ToreadDef,
 }
+
 impl Default for Forth {
     fn default() -> Self {
         Self::new()
@@ -54,9 +55,9 @@ impl Forth {
         &self.stack
     }
 
-    pub fn push_in_stack(&mut self, input: String, token_type: TokenType) -> Result {
-        match token_type {
-            TokenType::Word => {
+    pub fn push_in_stack(&mut self, token: TokenType) -> Result {
+        match token {
+            TokenType::Word(input) => {
                 if let Some(second_operand) = self.stack.pop() {
                     match input.as_str() {
                         "DUP" => {
@@ -109,8 +110,8 @@ impl Forth {
                     Err(Error::StackUnderflow)
                 }
             }
-            TokenType::Num => {
-                self.stack.push(input.parse::<i32>().unwrap());
+            TokenType::Num(num) => {
+                self.stack.push(num);
                 Ok(())
             }
         }
@@ -124,7 +125,7 @@ impl Forth {
 
         for token in tokens {
             match (&state, Self::evaluate_token_type(token)) {
-                (WordReadState::NotReading, TokenType::Word) => match token {
+                (WordReadState::NotReading, TokenType::Word(word)) => match word.as_str() {
                     ":" => {
                         state = WordReadState::ToreadWord;
                     }
@@ -135,14 +136,14 @@ impl Forth {
                             Some(items) => {
                                 for item in items {
                                     match Self::evaluate_token_type(&item) {
-                                        TokenType::Word => {
-                                            match self.push_in_stack(item, TokenType::Word) {
+                                        TokenType::Word(word) => {
+                                            match self.push_in_stack(TokenType::Word(word)) {
                                                 Ok(_) => {}
                                                 Err(err) => return Err(err),
                                             }
                                         }
-                                        TokenType::Num => {
-                                            match self.push_in_stack(item, TokenType::Num) {
+                                        TokenType::Num(num) => {
+                                            match self.push_in_stack(TokenType::Num(num)) {
                                                 Ok(_) => {}
                                                 Err(err) => return Err(err),
                                             }
@@ -154,23 +155,23 @@ impl Forth {
                         }
                     }
                 },
-                (WordReadState::NotReading, TokenType::Num) => {
-                    match self.push_in_stack(token.to_string(), TokenType::Num) {
+                (WordReadState::NotReading, TokenType::Num(num)) => {
+                    match self.push_in_stack(TokenType::Num(num)) {
                         Ok(_) => {}
                         Err(err) => return Err(err),
                     }
                 }
-                (WordReadState::ToreadWord, TokenType::Word) => match token {
+                (WordReadState::ToreadWord, TokenType::Word(_word)) => match token {
                     ":" => return Err(Error::InvalidWord),
                     ";" => return Err(Error::InvalidWord),
                     word => {
                         state = WordReadState::ToreadDef;
-                        temp_key = word.to_owned().to_ascii_uppercase();
+                        temp_key = word.to_ascii_uppercase();
                         temp_value.clear();
                     }
                 },
-                (WordReadState::ToreadWord, TokenType::Num) => return Err(Error::InvalidWord),
-                (WordReadState::ToreadDef, TokenType::Word) => match token {
+                (WordReadState::ToreadWord, TokenType::Num(_num)) => return Err(Error::InvalidWord),
+                (WordReadState::ToreadDef, TokenType::Word(_word)) => match token {
                     ";" => {
                         if temp_value.is_empty() {
                             return Err(Error::UnknownWord);
@@ -190,8 +191,8 @@ impl Forth {
                         None => return Err(Error::UnknownWord),
                     },
                 },
-                (WordReadState::ToreadDef, TokenType::Num) => {
-                    temp_value.push(token.to_owned());
+                (WordReadState::ToreadDef, TokenType::Num(num)) => {
+                    temp_value.push(num.to_string());
                 }
             }
         }
@@ -204,11 +205,10 @@ impl Forth {
     }
 
     pub fn evaluate_token_type(token: &str) -> TokenType {
-        if token.parse::<i32>().is_ok() {
-            TokenType::Num
-        } else {
-            TokenType::Word
-        }
+        match token.parse::<i32>() {
+            Ok(num) =>  TokenType::Num(num),
+            _ => TokenType::Word(token.to_owned())
+        }   
     }
 }
 
@@ -536,5 +536,47 @@ mod tests {
         assert!(f.eval(": bar foo ;").is_ok());
         assert!(f.eval("bar foo").is_ok());
         assert_eq!(vec![6, 6], f.stack());
+    }
+    #[test]
+    #[ignore]
+    fn alloc_attack() {
+        let mut f = Forth::new();
+        f.eval(": a 0 drop ;").unwrap();
+        f.eval(": b a a ;").unwrap();
+        f.eval(": c b b ;").unwrap();
+        f.eval(": d c c ;").unwrap();
+        f.eval(": e d d ;").unwrap();
+        f.eval(": f e e ;").unwrap();
+        f.eval(": g f f ;").unwrap();
+        f.eval(": h g g ;").unwrap();
+        f.eval(": i h h ;").unwrap();
+        f.eval(": j i i ;").unwrap();
+        f.eval(": k j j ;").unwrap();
+        f.eval(": l k k ;").unwrap();
+        f.eval(": m l l ;").unwrap();
+        f.eval(": n m m ;").unwrap();
+        f.eval(": o n n ;").unwrap();
+        f.eval(": p o o ;").unwrap();
+        f.eval(": q p p ;").unwrap();
+        f.eval(": r q q ;").unwrap();
+        f.eval(": s r r ;").unwrap();
+        f.eval(": t s s ;").unwrap();
+        f.eval(": u t t ;").unwrap();
+        f.eval(": v u u ;").unwrap();
+        f.eval(": w v v ;").unwrap();
+        f.eval(": x w w ;").unwrap();
+        f.eval(": y x x ;").unwrap();
+        f.eval(": z y y ;").unwrap();
+        // On an implementation with eager expansion of sub-custom-words,
+        // `z`'s definition is 2**26 items long. Assuming the implementation
+        // has compacted each instruction into a single byte, that takes up
+        // over 50 Mb of memory. Less efficient implementations will require
+        // more.
+        //
+        // This shouldn't crash or hang anyone's machine, but it's at least a
+        // testable proposition. A good implementation shouldn't be doing eager
+        // stack expansion, so it should require much less than that.
+        // Sanity check--few implementations should fail here.
+        assert!(f.stack().is_empty());
     }
 }
