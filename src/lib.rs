@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 pub type Value = i32;
 pub type Result = std::result::Result<(), Error>;
 
 pub struct Forth {
     stack: Vec<i32>,
-    vars: HashMap<String, Vec<String>>,
+    vars: HashMap<String, Rc<Vec<Op>>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -15,11 +15,17 @@ pub enum Error {
     UnknownWord,
     InvalidWord,
 }
-
 pub enum TokenType {
     Word(String),
     Num(i32),
 }
+
+pub enum Op{
+    Word(String),
+    Num(i32),
+    Ref(Rc<Vec<Op>>)
+}
+
 
 pub enum WordReadState {
     NotReading,
@@ -36,14 +42,14 @@ impl Default for Forth {
 impl Forth {
     pub fn new() -> Forth {
         let mut vars = HashMap::new();
-        vars.insert("+".to_string(), vec!["+".to_string()]);
-        vars.insert("-".to_string(), vec!["-".to_string()]);
-        vars.insert("*".to_string(), vec!["*".to_string()]);
-        vars.insert("/".to_string(), vec!["/".to_string()]);
-        vars.insert("DUP".to_string(), vec!["DUP".to_string()]);
-        vars.insert("DROP".to_string(), vec!["DROP".to_string()]);
-        vars.insert("SWAP".to_string(), vec!["SWAP".to_string()]);
-        vars.insert("OVER".to_string(), vec!["OVER".to_string()]);
+        vars.insert("+".to_string(), Rc::new(vec![Op::Word("+".to_string())]));
+        vars.insert("-".to_string(), Rc::new(vec![Op::Word("-".to_string())]));
+        vars.insert("*".to_string(), Rc::new(vec![Op::Word("*".to_string())]));
+        vars.insert("/".to_string(), Rc::new(vec![Op::Word("/".to_string())]));
+        vars.insert("DUP".to_string(), Rc::new(vec![Op::Word("DUP".to_string())]));
+        vars.insert("DROP".to_string(), Rc::new(vec![Op::Word("DROP".to_string())]));
+        vars.insert("SWAP".to_string(), Rc::new(vec![Op::Word("SWAP".to_string())]));
+        vars.insert("OVER".to_string(), Rc::new(vec![Op::Word("OVER".to_string())]));
 
         Forth {
             stack: Vec::new(),
@@ -54,10 +60,16 @@ impl Forth {
     pub fn stack(&self) -> &[Value] {
         &self.stack
     }
+    pub fn evaluate_token_type(token: &str) -> TokenType {
+        match token.parse::<i32>() {
+            Ok(num) =>  TokenType::Num(num),
+            _ => TokenType::Word(token.to_owned().to_ascii_uppercase())
+        }   
+    }
 
-    pub fn push_in_stack(&mut self, token: TokenType) -> Result {
+    pub fn push_in_stack(&mut self, token: &Op) -> Result {
         match token {
-            TokenType::Word(input) => {
+            Op::Word(input) => {
                 if let Some(second_operand) = self.stack.pop() {
                     match input.as_str() {
                         "DUP" => {
@@ -110,10 +122,16 @@ impl Forth {
                     Err(Error::StackUnderflow)
                 }
             }
-            TokenType::Num(num) => {
-                self.stack.push(num);
+            Op::Num(num) => {
+                self.stack.push(*num);
                 Ok(())
             }
+            Op::Ref(ops) => {
+                for op in ops.iter() {
+                    Self::push_in_stack(self, op)?;
+                }
+                Ok(())
+            },
         }
     }
 
@@ -121,7 +139,7 @@ impl Forth {
         let tokens = input.split_whitespace();
         let mut state: WordReadState = WordReadState::NotReading;
         let mut temp_key: String = String::default();
-        let mut temp_value: Vec<String> = Vec::default();
+        let mut temp_value: Vec<Op> = Vec::new();
 
         for token in tokens {
             match (&state, Self::evaluate_token_type(token)) {
@@ -131,23 +149,13 @@ impl Forth {
                     }
                     ";" => return Err(Error::InvalidWord),
                     word => {
-                        let def = self.vars.get(word.to_ascii_uppercase().as_str()).cloned();
+                        let def = self.vars.get(word).cloned();
                         match def {
                             Some(items) => {
-                                for item in items {
-                                    match Self::evaluate_token_type(&item) {
-                                        TokenType::Word(word) => {
-                                            match self.push_in_stack(TokenType::Word(word)) {
-                                                Ok(_) => {}
-                                                Err(err) => return Err(err),
-                                            }
-                                        }
-                                        TokenType::Num(num) => {
-                                            match self.push_in_stack(TokenType::Num(num)) {
-                                                Ok(_) => {}
-                                                Err(err) => return Err(err),
-                                            }
-                                        }
+                                for i in items.iter() {
+                                    match self.push_in_stack(i) {
+                                        Ok(_) => (),
+                                        Err(err) => {return Err(err)},
                                     }
                                 }
                             }
@@ -156,7 +164,7 @@ impl Forth {
                     }
                 },
                 (WordReadState::NotReading, TokenType::Num(num)) => {
-                    match self.push_in_stack(TokenType::Num(num)) {
+                    match self.push_in_stack(&Op::Num(num)) {
                         Ok(_) => {}
                         Err(err) => return Err(err),
                     }
@@ -167,32 +175,33 @@ impl Forth {
                     word => {
                         state = WordReadState::ToreadDef;
                         temp_key = word.to_ascii_uppercase();
-                        temp_value.clear();
+                        
                     }
                 },
                 (WordReadState::ToreadWord, TokenType::Num(_num)) => return Err(Error::InvalidWord),
-                (WordReadState::ToreadDef, TokenType::Word(_word)) => match token {
+                (WordReadState::ToreadDef, TokenType::Word(word)) => match word.as_str() {
                     ";" => {
                         if temp_value.is_empty() {
                             return Err(Error::UnknownWord);
                         }
-                        self.vars.insert(temp_key.clone(), temp_value.clone());
-                        state = WordReadState::NotReading;
+                        else {
+                            self.vars.insert(temp_key.clone(), Rc::new(temp_value));
+                            temp_value = Vec::new();
+                            state = WordReadState::NotReading;
+                        }
                     }
                     ":" => {
                         return Err(Error::InvalidWord);
                     }
-                    word => match self.vars.get(word.to_ascii_uppercase().as_str()) {
+                    word => match self.vars.get(word) {
                         Some(def) => {
-                            for x in def {
-                                temp_value.push(x.to_string().to_ascii_uppercase());
-                            }
+                            temp_value.push(Op::Ref(Rc::clone(def)));
                         }
                         None => return Err(Error::UnknownWord),
                     },
                 },
                 (WordReadState::ToreadDef, TokenType::Num(num)) => {
-                    temp_value.push(num.to_string());
+                    temp_value.push(Op::Num(num));
                 }
             }
         }
@@ -204,12 +213,6 @@ impl Forth {
         }
     }
 
-    pub fn evaluate_token_type(token: &str) -> TokenType {
-        match token.parse::<i32>() {
-            Ok(num) =>  TokenType::Num(num),
-            _ => TokenType::Word(token.to_owned())
-        }   
-    }
 }
 
 #[cfg(test)]
@@ -255,6 +258,7 @@ mod tests {
         assert_eq!(Err(Error::StackUnderflow), f.eval("1 -"));
         assert_eq!(Err(Error::StackUnderflow), f.eval("-"));
     }
+
     #[test]
 
     fn can_multiply_two_numbers() {
@@ -537,6 +541,17 @@ mod tests {
         assert!(f.eval("bar foo").is_ok());
         assert_eq!(vec![6, 6], f.stack());
     }
+    #[test]
+
+    fn foobar() {
+        let mut f = Forth::new();
+        assert!(f.eval(": bar 5 ;").is_ok());
+        assert!(f.eval(": foo bar ;").is_ok());
+        assert!(f.eval(": bar 7 ;").is_ok());
+        assert!(f.eval("foo bar").is_ok());
+        assert_eq!(vec![5, 7], f.stack());
+    }
+
     #[test]
     #[ignore]
     fn alloc_attack() {
